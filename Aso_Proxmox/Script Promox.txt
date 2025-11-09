@@ -1,0 +1,76 @@
+#!/bin/bash
+# ========================================================
+# Proyecto: Servicios base en topología virtual PROXMOX
+# Servicios: DHCP, DNS, WEB y FTP
+# Autor: Jhonny Romero - ITIN
+# ========================================================
+
+# === 1. DESCARGA DE ISO DE DEBIAN ===
+cd /var/lib/vz/template/iso
+wget https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/debian-13.1.0-amd64-netinst.iso
+
+# === 2. LISTAR CONTENEDORES EXISTENTES ===
+pct list
+
+# === 3. CONFIGURACIÓN DE RED EN PROXMOX ===
+nano /etc/network/interfaces
+# Ejemplo:
+# auto vmbr0
+# iface vmbr0 inet static
+#     address 192.168.1.200/24
+#     gateway 192.168.1.254
+#     bridge-ports enp0s3
+#     dns-nameservers 8.8.8.8 1.1.1.1
+
+# === 4. HABILITAR REENVÍO DE PAQUETES (ROUTEO) ===
+echo "net.ipv4.ip_forward=1" > /etc/sysctl.conf
+sysctl -p
+
+# === 5. PRUEBAS DE CONECTIVIDAD ===
+ping -c 3 8.8.8.8
+ping -c 3 google.com
+
+# === 6. INSTALACIÓN DEL SERVIDOR WEB (Apache2) ===
+apt update && apt install -y apache2
+systemctl status apache2
+
+# Probar desde consola local
+curl http://localhost
+
+# === 7. DIRECTORIO WEB PRINCIPAL ===
+ls -l /var/www/html
+# index.html → Página de prueba o personalizada
+
+# === 8. VERIFICAR FUNCIONAMIENTO WEB ===
+# En el navegador:
+# http://192.168.1.200
+
+# === 9. INSTALACIÓN DEL SERVIDOR FTP (vsftpd) ===
+apt install -y vsftpd
+systemctl enable vsftpd --now
+
+# Crear usuario FTP de prueba
+adduser ftpuser
+mkdir -p /home/ftpuser/ftp/upload
+chown -R ftpuser:ftpuser /home/ftpuser/ftp
+
+# === 10. CONEXIÓN FTP DESDE WINDOWS ===
+# En PowerShell:
+# ftp 192.168.1.200
+# usuario: ftpuser
+# contraseña: ****
+# cd upload
+# put C:\Users\JR\Desktop\Archivo.txt
+
+# === 11. VERIFICAR ARCHIVO SUBIDO EN EL SERVIDOR ===
+ls -l /home/ftpuser/ftp/upload
+# Archivo.txt debe estar presente
+
+# === 12. MONITOREO DE CONTENEDORES EN PROXMOX ===
+# Desde la interfaz web:
+# https://<IP-Proxmox>:8006
+# Revisar CPU, memoria y almacenamiento en Summary
+
+# ========================================================
+# Fin del script resumen
+# ========================================================

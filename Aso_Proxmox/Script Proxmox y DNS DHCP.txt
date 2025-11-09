@@ -1,0 +1,130 @@
+#!/bin/bash
+# ========================================================
+# Proyecto: Servicios base en topología virtual PROXMOX
+# Servicios: DHCP y DNS
+# Autor: Rommel Sahid Bosquez Félix - ITIN
+# ========================================================
+
+# === 1. CONFIGURACIÓN DE FIREWALL EN PROXMOX ===
+echo "Activando firewall principal y reglas base..."
+pve-firewall enable
+systemctl restart pve-firewall
+systemctl status pve-firewall
+
+# Crear archivo de reglas del clúster
+cat <<EOF > /etc/pve/firewall/cluster.fw
+[OPTIONS]
+enable: 1
+policy_in: ACCEPT
+policy_out: ACCEPT
+
+[RULES]
+IN ACCEPT -p tcp --dport 22 -comment "SSH acceso remoto"
+IN ACCEPT -p tcp --dport 8006 -comment "Proxmox Web GUI"
+IN ACCEPT -p udp --dport 67 -comment "DHCP servidor"
+IN ACCEPT -p tcp --dport 53 -comment "DNS TCP"
+IN ACCEPT -p udp --dport 53 -comment "DNS UDP"
+EOF
+
+pve-firewall reload
+
+# === 2. HABILITAR REENVÍO DE PAQUETES (ROUTEO) ===
+echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+sysctl -p
+
+# === 3. CONFIGURACIÓN DEL SERVIDOR DHCP (srv-dhcp) ===
+apt update && apt install -y isc-dhcp-server
+
+echo 'INTERFACESv4="eth0"' > /etc/default/isc-dhcp-server
+
+cat <<EOF > /etc/dhcp/dhcpd.conf
+option domain-name "lab.local";
+option domain-name-servers 10.0.2.10;
+default-lease-time 600;
+max-lease-time 7200;
+subnet 10.0.2.0 netmask 255.255.255.0 {
+  range 10.0.2.100 10.0.2.150;
+  option routers 10.0.2.1;
+  option domain-name-servers 10.0.2.10;
+}
+EOF
+
+systemctl enable isc-dhcp-server --now
+systemctl status isc-dhcp-server
+
+# === 4. CONFIGURACIÓN DEL SERVIDOR DNS (srv-dns) ===
+apt install -y bind9 bind9utils
+
+cat <<EOF > /etc/bind/named.conf.local
+zone "lab.local" {
+  type master;
+  file "/etc/bind/db.lab.local";
+};
+zone "2.0.10.in-addr.arpa" {
+  type master;
+  file "/etc/bind/db.10.0.2";
+};
+EOF
+
+# Zona directa
+cat <<EOF > /etc/bind/db.lab.local
+\$TTL 604800
+@ IN SOA srv-dns.lab.local. admin.lab.local. (
+2 604800 86400 2419200 604800 )
+@ IN NS srv-dns.lab.local.
+srv-dns IN A 10.0.2.10
+srv-dhcp IN A 10.0.2.15
+EOF
+
+# Zona inversa
+cat <<EOF > /etc/bind/db.10.0.2
+\$TTL 604800
+@ IN SOA srv-dns.lab.local. admin.lab.local. (
+2 604800 86400 2419200 604800 )
+@ IN NS srv-dns.lab.local.
+10 IN PTR srv-dns.lab.local.
+EOF
+
+systemctl enable bind9 --now
+systemctl restart bind9
+systemctl status bind9
+
+# === 5. FIREWALL LOCAL EN CONTENEDORES ===
+apt install -y ufw
+ufw default deny incoming
+ufw default allow outgoing
+ufw allow 22/tcp
+ufw allow 53/tcp
+ufw allow 53/udp
+ufw allow 67/udp
+ufw enable
+ufw status verbose
+
+# === 6. PRUEBAS DE CONECTIVIDAD ===
+ping -c 3 10.0.2.10
+nslookup srv-dns.lab.local
+nslookup google.com
+
+# === 7. VERIFICACIÓN DE LOGS ===
+tail -n 10 /var/log/syslog | grep dhcp
+tail -n 10 /var/log/syslog | grep named
+
+# === 8. VERIFICAR FIREWALL PROXMOX ===
+pve-firewall status
+cat /etc/pve/firewall/cluster.fw
+
+# === 9. VALIDACIÓN DE PUERTOS ACTIVOS ===
+ss -tuln | egrep ":53|:67|:8006"
+
+# === 10. VERIFICAR CONEXIÓN E2E ===
+echo "Comprobando flujo DHCP → DNS → Web (Jhonny)..."
+ping -c 3 10.0.2.15
+nslookup srv-web.lab.local 10.0.2.10
+
+# === 11. CONFIRMACIÓN FINAL ===
+echo "Servicios DHCP y DNS configurados correctamente."
+systemctl list-units | grep -E "dhcp|bind9"
+
+# ========================================================
+# Fin del script (Nodo Sahid - DHCP + DNS + Firewall)
+# ========================================================
